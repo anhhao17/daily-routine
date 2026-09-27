@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Usage: ./today        -> open today's daily note (carries over unfinished tasks)
+#        ./today week   -> open this week's review (pulls in last 7 days of logs)
+set -euo pipefail
+cd "$(dirname "$(readlink -f "$0")")"
+EDITOR="${EDITOR:-nvim}"
+
+# Unchecked tasks from "Top 3" + "If time" sections, and all "Waiting on" lines
+# Replace {{NAME}} in a template with env var NAME (literal, no escape processing)
+fill() { awk '{ while (match($0, /\{\{[A-Z]+\}\}/)) { k=substr($0,RSTART+2,RLENGTH-4); printf "%s%s", substr($0,1,RSTART-1), ENVIRON[k]; $0=substr($0,RSTART+RLENGTH) } print }' "$1"; }
+section() { awk -v s="$2" '/^### /{on=index($0,s)>0; next} on && NF' "$1"; }
+# Unchecked tasks plus their indented comment lines
+open_tasks() { section "$1" "$2" | awk '/^- \[ \] .*[^ ]/{k=1; print; next} /^[ \t]/{if(k) print; next} {k=0}'; }
+
+if [[ "${1:-}" == "week" ]]; then
+    f="weekly/$(date +%G-W%V).md"
+    if [[ ! -f $f ]]; then
+        logs=$(for d in $(ls daily/*.md 2>/dev/null | tail -7); do echo "### $(basename "$d" .md)"; section "$d" "Log"; done)
+        WEEK="$(date +%G-W%V)" LOGS="$logs" fill templates/weekly.md > "$f"
+    fi
+else
+    f="daily/$(date +%F).md"
+    if [[ ! -f $f ]]; then
+        prev=$(ls daily/*.md 2>/dev/null | tail -1 || true)
+        carry="- [ ] "; waiting="- "
+        if [[ -n $prev ]]; then
+            c=$( { open_tasks "$prev" "Top 3"; open_tasks "$prev" "If time"; } || true)
+            w=$(section "$prev" "Waiting on" | grep -vE '^- *$' || true)
+            [[ -n $c ]] && carry=$c
+            [[ -n $w ]] && waiting=$w
+        fi
+        DATE="$(date '+%F (%a)')" CARRY="$carry" WAITING="$waiting" fill templates/daily.md > "$f"
+    fi
+fi
+exec "$EDITOR" "$f"
